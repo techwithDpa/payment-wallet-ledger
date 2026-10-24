@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { toJson } from './json.js';
+import { adminRoutes } from './routes/admin.js';
 import { healthRoutes } from './routes/health.js';
 import { transferRoutes } from './routes/transfers.js';
 import { userRoutes } from './routes/users.js';
@@ -36,5 +37,6 @@ export function buildApp() {
   app.register(userRoutes);
   app.register(walletRoutes);
   app.register(transferRoutes);
+  app.register(adminRoutes);
   return app;
 }
