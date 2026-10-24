@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { toJson } from './json.js';
+import { defaultLlm, type LlmClient } from './services/llm.js';
 import { adminRoutes } from './routes/admin.js';
 import { healthRoutes } from './routes/health.js';
 import { transferRoutes } from './routes/transfers.js';
@@ -8,7 +9,7 @@ import { userRoutes } from './routes/users.js';
 import { walletRoutes } from './routes/wallets.js';
 
 // Builds the app without starting a server, so tests can call it directly.
-export function buildApp() {
+export function buildApp(opts: { llm?: LlmClient } = {}) {
   const app = Fastify({
     logger: process.env.NODE_ENV !== 'test',
     genReqId: () => randomUUID(), // becomes request_id in every error response
@@ -34,7 +35,7 @@ export function buildApp() {
   });
 
   app.register(healthRoutes);
-  app.register(userRoutes);
+  app.register(userRoutes, { llm: opts.llm ?? defaultLlm() });
   app.register(walletRoutes);
   app.register(transferRoutes);
   app.register(adminRoutes);

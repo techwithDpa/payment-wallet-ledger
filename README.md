@@ -17,7 +17,7 @@ docker compose run --rm api node dist/seed.js # demo users Asha, Ravi, Meera wit
 ```bash
 docker compose up -d db migrate   # database + schema
 npm install
-npm test                          # 49 tests, ~7 s, includes the 100-request stampede x20 and 10k-transfer reconciliation
+npm test                          # 54 tests, ~7 s, includes the 100-request stampede x20 and 10k-transfer reconciliation
 npm run seed                      # same demo data, from your laptop
 ```
 
@@ -44,6 +44,7 @@ Errors are always `{"code": "...", "message": "...", "request_id": "..."}`.
 | GET | `/admin/reconciliation/runs/{id}` | admin | 200 run summary + `issues`, 404 |
 | GET | `/admin/risk/queue?limit&offset` | admin | 200 HELD transfers, oldest first, with their flags |
 | POST | `/admin/risk/{transfer_id}/decision` `{decision: "release" \| "reverse", reason?}` | admin | 200, 404, 409 `NOT_HELD`, 422 (release but the money is gone) |
+| POST | `/users/{id}/statement/ask` `{question}` | that user only | 200 `{answer, model, scope}`, 403 |
 | GET | `/health` | anyone | 200 |
 
 Idempotency errors on any POST: 400 `IDEMPOTENCY_KEY_REQUIRED`, 409 `REQUEST_IN_PROGRESS`, 422 `IDEMPOTENCY_KEY_REUSED`. A replay returns the saved status and body with header `idempotent-replayed: true`.
@@ -123,6 +124,15 @@ See it happen: [`docs/isolation.md`](docs/isolation.md) replays double spend, de
 - **Release** re-locks the accounts, re-checks the balance (422 and it stays HELD if the money is gone meanwhile), then posts the D/C lines: the same code as a normal transfer. **Reverse** marks it `REJECTED`; no money moved, so nothing to undo. Both write a status-audit row and resolve the flags.
 - The spike comparison happens in SQL (`amount > 5 * avg(amount)`), so the average never becomes a JS float.
 
+### Statement Q&A and prompt injection
+`src/services/statementQa.ts`, `src/services/llm.ts`. A user asks "who did I pay the most?" and gets a plain-language answer.
+
+- **Scope in SQL, not in the prompt.** The server runs queries filtered on the caller's `user_id` and gives the model only those facts. The model has no database access and no tools, so "show all users" is impossible: it never saw them. Other wallets appear only as `wallet 284`, never with their owner's name.
+- **Numbers come from SQL.** Totals, the largest payment and the top payee are computed in Postgres; the model only phrases them.
+- **User text is fenced as data.** The question and transfer notes sit inside `<statement_data>` / `<question>`, the system prompt says never to follow instructions there, and `<` is escaped so a note can't close the fence.
+- **Tested against the worst case.** The mock LLM is deliberately gullible: "ignore previous instructions" anywhere makes it dump everything it was given. The test plants that in a transfer note and in the question, and checks that the dump contains only the caller's data (no other user's name, email, note or balance).
+- The model is behind an `LlmClient` interface; the mock needs no key and is deterministic. A real provider plugs in at `defaultLlm()`.
+
 ### Trade-offs
 | Choice | Gain | Cost |
 | --- | --- | --- |
@@ -133,6 +143,7 @@ See it happen: [`docs/isolation.md`](docs/isolation.md) replays double spend, de
 | OFFSET pagination | simple | slow at deep offsets (keyset pagination is in Next) |
 | Reconciliation scans everything | simple, catches anything | O(ledger size) per run; at scale, check only accounts touched since the last run |
 | Header auth | lets the project focus on the ledger | not real security |
+| Q&A inside the idempotency transaction | a retried question gets the same answer | holds a DB connection during the LLM call; with a real model, claim the key, commit, call, then save |
 | HELD doesn't reserve funds | balances stay simple, ledger untouched while held | release can fail with 422 if the wallet was emptied meanwhile |
 
 ## Assumptions
@@ -156,10 +167,11 @@ See it happen: [`docs/isolation.md`](docs/isolation.md) replays double spend, de
 - [x] Isolation lab: [`docs/isolation.md`](docs/isolation.md), 4 two-session psql cases
 - [x] Reconciliation: nightly worker job + admin endpoints, root-cause issues, no overlapping runs
 - [x] Fraud rules: velocity / amount spike / new payee, HELD transfers (202), admin queue + release/reverse
+- [x] Statement Q&A with mock LLM, prompt-injection test
 
 **Not done yet**
-- [ ] Statement Q&A with mock LLM (Step 7)
 - [ ] Fees (the `FEE` type exists, nothing charges one)
+- [ ] A real LLM provider (the interface is ready; only the mock is wired)
 
 **Next**
 - LLM explanations for risk flags; `EXPLAIN` study on 1M ledger rows; keyset pagination for statements; sharding by wallet.

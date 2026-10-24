@@ -2,14 +2,20 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { AppError } from '../errors.js';
 import { idempotent, sendStored } from '../services/idempotency.js';
-import { callerOf, idParams, parse } from '../validation.js';
+import type { LlmClient } from '../services/llm.js';
+import { askStatement } from '../services/statementQa.js';
+import { callerOf, idParams, parse, requireUser } from '../validation.js';
 
 const createUserBody = z.object({
   name: z.string().trim().min(1).max(200),
   email: z.string().trim().toLowerCase().email().max(320),
 });
 
-export async function userRoutes(app: FastifyInstance) {
+const askBody = z.object({
+  question: z.string().trim().min(1).max(500),
+});
+
+export async function userRoutes(app: FastifyInstance, opts: { llm: LlmClient }) {
   // POST /users  sign up (no X-User-Id needed: you don't have one yet)
   app.post('/users', async (req, reply) => {
     const body = parse(createUserBody, req.body);
@@ -49,6 +55,20 @@ export async function userRoutes(app: FastifyInstance) {
       );
       return { status: 201, body: wallet };
     });
+    return sendStored(reply, stored);
+  });
+
+  // POST /users/:id/statement/ask  {question}  -> plain-language answer about YOUR statement
+  app.post('/users/:id/statement/ask', async (req, reply) => {
+    const userId = requireUser(req);
+    const { id } = parse(idParams, req.params);
+    // Only about yourself. Not even admins: this endpoint is the user's own assistant.
+    if (id !== userId) throw new AppError(403, 'FORBIDDEN', 'You can only ask about your own statement');
+    const { question } = parse(askBody, req.body);
+    const stored = await idempotent(req, userId, async (client) => ({
+      status: 200,
+      body: await askStatement(client, opts.llm, userId, question),
+    }));
     return sendStored(reply, stored);
   });
 }
