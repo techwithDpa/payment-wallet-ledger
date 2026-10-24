@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { pool } from '../src/db.js';
 import { balanceOf, createUserWithWallet, headers, ledgerBalanceOf, unbalancedTransfers } from './helpers.js';
@@ -89,6 +89,16 @@ describe('transfers', () => {
 });
 
 describe('stampede', () => {
+  // This test is about locking, not fraud: 100 transfers in a second would trip the
+  // velocity rule (>5 in 10 min -> HELD). Switch it off for this test only.
+  // Safe because test files run one at a time (vitest.config.ts).
+  beforeAll(async () => {
+    await pool.query(`UPDATE risk_rules SET enabled = false WHERE code = 'VELOCITY'`);
+  });
+  afterAll(async () => {
+    await pool.query(`UPDATE risk_rules SET enabled = true WHERE code = 'VELOCITY'`);
+  });
+
   // ₹500 wallet, 100 parallel ₹10 transfers -> exactly 50 succeed, balance ends at 0, never negative.
   it('100 parallel ₹10 transfers from a ₹500 wallet: exactly 50 succeed (x20)', async () => {
     for (let round = 1; round <= 20; round++) {

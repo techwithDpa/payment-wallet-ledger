@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { pool } from '../db.js';
 import { AppError } from '../errors.js';
 import { idempotent, sendStored } from '../services/idempotency.js';
+import { flagsFor } from '../services/risk.js';
 import { getAccount, moveMoney, requireOwnWallet, reverseTransfer, systemAccountId } from '../services/transfers.js';
 import { amountSchema, callerOf, idParams, idSchema, parse, requireAdmin, requireUser } from '../validation.js';
 
@@ -62,8 +63,11 @@ export async function transferRoutes(app: FastifyInstance) {
         amount: body.amount,
         note: body.note,
         createdBy: userId,
+        riskCheck: true,
       });
-      return { status: 201, body: transfer };
+      // 202 Accepted: saved but waiting for an admin; no money has moved yet.
+      const status = transfer.status === 'HELD' ? 202 : 201;
+      return { status, body: { ...transfer, risk_flags: await flagsFor(client, transfer.transfer_id) } };
     });
     return sendStored(reply, stored);
   });
@@ -128,6 +132,6 @@ export async function transferRoutes(app: FastifyInstance) {
          FROM transfer_status_audit WHERE transfer_id = $1 ORDER BY audit_id`,
       [id],
     );
-    return { ...rest, entries, status_history: statusHistory };
+    return { ...rest, entries, status_history: statusHistory, risk_flags: await flagsFor(pool, id) };
   });
 }

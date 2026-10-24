@@ -56,5 +56,15 @@ npx vitest run test/reconciliation.test.ts
 ```
 Say: 10k transfers, three corruptions (an amount, a deleted credit line, a stored balance) → exactly 3 root problems, not 5 symptoms. Explain the "matches neither view" rule.
 
-## 7. Wrap-up (30 s)
+## 7. Fraud hold (45 s)
+Send 6 quick transfers from one wallet (reuse `send` from section 3 with a fresh `KEY` each time):
+```bash
+for i in 1 2 3 4 5 6; do KEY=$(uuidgen); send 100; done   # 5x 201, then 202 HELD (VELOCITY)
+curl -s localhost:3000/admin/risk/queue -H 'x-admin: true'
+curl -s -XPOST localhost:3000/admin/risk/<transfer_id>/decision -H 'x-admin: true' -H "idempotency-key: $(uuidgen)" \
+  -H 'content-type: application/json' -d '{"decision":"release"}'
+```
+Say: the held transfer wrote no ledger lines until the admin released it; release re-checks the balance under the lock.
+
+## 8. Wrap-up (30 s)
 Show README "Done / Not done / Next" and the green CI run on the PR.
