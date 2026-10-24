@@ -2,6 +2,36 @@
 
 Newest first. At the end of every working session, add: what was done, what's next, anything surprising.
 
+## 2026-10-24 15:30 — Money path: what is implemented (reference)
+Everything that moves money, in one place. All of it runs inside ONE transaction on ONE `PoolClient` (`withTransaction('READ COMMITTED', ...)` via `idempotent()`).
+
+**Request flow for every money POST** (`/transfers/topup`, `/transfers`, `/transfers/withdraw`, `/transfers/{id}/reverse`):
+1. `requireUser()` / `requireAdmin()`: `X-User-Id` header, else 401 (reverse: `X-Admin: true`, else 403).
+2. `parse()` with zod: `amount` must be whole paise (positive int or digit string, max 18 digits) → `bigint`. Floats, `"10.50"`, `"1e5"`, 0, negatives → 400 `VALIDATION_ERROR`. No `parseFloat` anywhere.
+3. `idempotent()` (`src/services/idempotency.ts`): `Idempotency-Key` must be a UUID (else 400). Opens the transaction and claims the key with `INSERT ... 'IN_PROGRESS' ON CONFLICT DO NOTHING`.
+4. `SAVEPOINT money`, then the route's handler: ownership check (`requireOwnWallet`, 404 if not yours) → `moveMoney()` or `reverseTransfer()`.
+5. Business error (`AppError`, e.g. 422 INSUFFICIENT_FUNDS) → `ROLLBACK TO SAVEPOINT money` (money work undone, key row kept) and the error response is saved. Unexpected crash → whole transaction rolls back, key included, so the client can retry.
+6. Response saved as JSONB, key → COMPLETED, COMMIT. The reply is the stored JSONB, so replays are byte-identical.
+7. Seen key: different request hash → 422 `IDEMPOTENCY_KEY_REUSED`; still IN_PROGRESS → 409; COMPLETED → replay with header `idempotent-replayed: true`.
+
+**`moveMoney()`** (`src/services/transfers.ts`):
+1. Same account on both sides → 422 `SAME_ACCOUNT`.
+2. `SELECT ... WHERE account_id = ANY($1) ORDER BY account_id FOR UPDATE`: locks both rows, lowest id first (no deadlocks).
+3. Missing account → 404. Re-check balance UNDER the lock: user wallet with `balance < amount` → 422 `INSUFFICIENT_FUNDS`. System accounts may go negative (`cash_in` goes negative as money enters).
+4. INSERT transfer (status `COMPLETED`) → INSERT one `D` line (from) + one `C` line (to), same amount.
+5. `UPDATE accounts SET balance = balance - $1` / `+ $1`: Postgres does the arithmetic on the locked row.
+6. INSERT `transfer_status_audit` row (NULL → COMPLETED).
+
+**Transfer types wired to routes:** TOPUP = `cash_in` → wallet; PEER = wallet → another user's wallet; WITHDRAWAL = wallet → `cash_out`; REVERSAL = see below. `FEE` exists in the schema but nothing charges fees yet.
+
+**`reverseTransfer()`**: locks the original transfer row `FOR UPDATE` → not found 404; is a REVERSAL → 409 `NOT_REVERSIBLE`; already REVERSED → 409 `ALREADY_REVERSED`; not COMPLETED → 409 → `moveMoney(type REVERSAL, to → from)` (422 if the receiver already spent it) → original status `REVERSED` + audit row. Ledger lines are never edited; `reverses_transfer_id UNIQUE` is a second guard against double reversal.
+
+**Database guards (last line of defence):** wallet `balance >= 0` CHECK, `amount > 0` CHECKs, ledger append-only trigger (UPDATE/DELETE/TRUNCATE raise), `UNIQUE NULLS NOT DISTINCT (user_id, key)` on idempotency keys, BIGINT paise everywhere and `bigint` in TS (type parser for OID 20). JSON responses send amounts and ids as strings.
+
+**Proven by tests:** stampede ×20 (exactly 50/100 succeed, balance 0, stored == ledger balance), debits = credits for every transfer, same request ×5 / same key ×10 parallel → 1 transfer, key reuse with a different amount → 422 with no money moved, failed transfer replays the same 422, 5 parallel reversals → exactly one 201.
+
+**Not in the money path yet:** HELD transfers / 202 (Step 6 fraud rules: HELD writes no ledger lines until released), fees, reconciliation job (Step 5).
+
 ## 2026-10-24 15:22 — Step 4 done (rest of the API)
 - Done: `POST /users` (409 EMAIL_TAKEN), `POST /users/{id}/wallets`, `GET /wallets/{id}/balance`, `GET /wallets/{id}/statement?limit&offset` (newest first, `created_at DESC, entry_id DESC`), `POST /transfers/withdraw`, `POST /transfers/{id}/reverse`, `GET /transfers/{id}` (+ entries + status_history). Every POST goes through `idempotent()`.
 - Decisions (for the README assumptions): reverse is admin-only (`X-Admin: true`); a reversal is refused with 422 if the receiver already spent the money (wallet never goes negative); a reversal can't be reversed; "not yours" and "doesn't exist" both return 404 so ids can't be probed; `POST /users` needs no `X-User-Id` and its idempotency scope is `user_id NULL`.
