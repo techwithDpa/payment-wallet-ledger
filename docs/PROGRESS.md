@@ -2,6 +2,12 @@
 
 Newest first. At the end of every working session, add: what was done, what's next, anything surprising.
 
+## 2026-10-24 15:16 — Step 3 done (idempotency)
+- Done: `idempotent()` in `src/services/idempotency.ts`. Claim key with `INSERT ... ON CONFLICT DO NOTHING` + run the transfer in the SAME transaction; business errors roll back to `SAVEPOINT money` and the error response is still saved. Seen key: different hash → 422 `IDEMPOTENCY_KEY_REUSED`, IN_PROGRESS → 409, COMPLETED → replay (header `idempotent-replayed: true`). Missing/invalid header → 400. Both transfer routes use it.
+- Detail: the reply is always the JSONB read back with `RETURNING`, so the first response and replays are byte-identical (JSONB reorders keys, so sending the JS object first would differ).
+- Verified: same request ×5 → 1 transfer + 5 identical bodies; same key ×10 parallel → 1 transfer; same key different amount → 422, no money moved; 30/30 tests.
+- Next: Step 4, rest of the API.
+
 ## 2026-10-24 15:15 — Step 2 done (safe transfers + stampede)
 - Done: `moveMoney()` in `src/services/transfers.ts` (lock both rows `FOR UPDATE` in ascending id order → re-check balance under lock → transfer + D/C lines + `balance = balance ± $amount` + audit row). Routes `POST /transfers/topup`, `POST /transfers`. `AppError`, zod `amountSchema` (whole paise only, int or digit string), bigint-safe JSON (amounts and ids sent as strings).
 - Verified: stampede (₹500 wallet, 100 parallel ₹10) gives exactly 50×201 + 50×422, balance 0, stored == ledger balance, all 20 rounds; debits = credits for every transfer.

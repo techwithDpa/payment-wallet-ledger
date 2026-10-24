@@ -38,6 +38,7 @@ export async function unbalancedTransfers(): Promise<bigint[]> {
   return rows.map((r) => r.transfer_id);
 }
 
+// Every POST needs an Idempotency-Key; by default each call gets a fresh one.
 export function headers(userId: bigint, extra: Record<string, string> = {}) {
-  return { 'x-user-id': userId.toString(), ...extra };
+  return { 'x-user-id': userId.toString(), 'idempotency-key': crypto.randomUUID(), ...extra };
 }

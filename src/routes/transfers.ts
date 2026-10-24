@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { withTransaction } from '../db.js';
 import { AppError } from '../errors.js';
+import { idempotent, sendStored } from '../services/idempotency.js';
 import { getAccount, moveMoney, requireOwnWallet, systemAccountId } from '../services/transfers.js';
 import { amountSchema, idSchema, parse, requireUser } from '../validation.js';
 
@@ -23,9 +23,9 @@ export async function transferRoutes(app: FastifyInstance) {
   app.post('/transfers/topup', async (req, reply) => {
     const userId = requireUser(req);
     const body = parse(topupBody, req.body);
-    const transfer = await withTransaction('READ COMMITTED', async (client) => {
+    const stored = await idempotent(req, userId, async (client) => {
       await requireOwnWallet(client, body.wallet_id, userId);
-      return moveMoney(client, {
+      const transfer = await moveMoney(client, {
         type: 'TOPUP',
         fromAccountId: await systemAccountId(client, 'cash_in'),
         toAccountId: body.wallet_id,
@@ -33,21 +33,22 @@ export async function transferRoutes(app: FastifyInstance) {
         note: body.note,
         createdBy: userId,
       });
+      return { status: 201, body: transfer };
     });
-    return reply.status(201).send(transfer);
+    return sendStored(reply, stored);
   });
 
   // POST /transfers  your wallet -> someone else's wallet
   app.post('/transfers', async (req, reply) => {
     const userId = requireUser(req);
     const body = parse(peerBody, req.body);
-    const transfer = await withTransaction('READ COMMITTED', async (client) => {
+    const stored = await idempotent(req, userId, async (client) => {
       await requireOwnWallet(client, body.from_wallet_id, userId);
       const to = await getAccount(client, body.to_wallet_id);
       if (!to || to.kind !== 'USER_WALLET') {
         throw new AppError(404, 'WALLET_NOT_FOUND', `Wallet ${body.to_wallet_id} not found`);
       }
-      return moveMoney(client, {
+      const transfer = await moveMoney(client, {
         type: 'PEER',
         fromAccountId: body.from_wallet_id,
         toAccountId: body.to_wallet_id,
@@ -55,7 +56,8 @@ export async function transferRoutes(app: FastifyInstance) {
         note: body.note,
         createdBy: userId,
       });
+      return { status: 201, body: transfer };
     });
-    return reply.status(201).send(transfer);
+    return sendStored(reply, stored);
   });
 }
