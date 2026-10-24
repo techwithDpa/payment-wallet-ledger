@@ -2,6 +2,15 @@
 
 Newest first. At the end of every working session, add: what was done, what's next, anything surprising.
 
+## 2026-10-24 16:25 — Isolation lab done (`docs/isolation.md`)
+- Done: 4 two-session psql cases, each tied to a code choice, with outputs captured from real runs on the dev DB (throwaway `lab_` tables, dropped afterwards):
+  1. double spend: read-then-write loses 700 (1400 spent from 1000) vs `FOR UPDATE` + re-check → `moveMoney()`
+  2. deadlock with opposite lock order (`ERROR: deadlock detected`) vs `ORDER BY id FOR UPDATE` → `moveMoney()`
+  3. `READ COMMITTED` reader sees 2100 of a 2000 total mid-transfer vs `REPEATABLE READ` 2000 → `executeRun()`
+  4. parallel `INSERT ... ON CONFLICT DO NOTHING` waits for the first transaction: commit → 0 rows, rollback → takes the key → `idempotent()`
+- README links it from the locking section.
+- Next: merge PRs #3, #4, then this one. Then Step 6 fraud rules (HELD/202, risk_rules, risk_flags, `/admin/risk/*`).
+
 ## 2026-10-24 16:12 — Step 5 done (reconciliation)
 - Done: migration `20261024020000_reconciliation.sql` (recon_runs, recon_issues). `src/services/reconciliation.ts`: one `REPEATABLE READ` snapshot, `job_locks` row `FOR UPDATE NOWAIT` (second run → SKIPPED), two checks written as `INSERT ... SELECT` into recon_issues, totals of debits/credits on the run. `POST /admin/reconciliation/run` (202, idempotent, runs in background after commit), `GET /admin/reconciliation/runs/{id}`. Worker: nightly at 02:30 (heartbeat removed).
 - Root-cause rule: transfer whose lines don't match it → TRANSFER_LEDGER_MISMATCH. Account reported only if stored balance ≠ ledger view AND ≠ transfers view (otherwise it's a symptom of a broken transfer).
