@@ -1,6 +1,10 @@
 import Fastify from 'fastify';
 import { randomUUID } from 'node:crypto';
+import { toJson } from './json.js';
 import { healthRoutes } from './routes/health.js';
+import { transferRoutes } from './routes/transfers.js';
+import { userRoutes } from './routes/users.js';
+import { walletRoutes } from './routes/wallets.js';
 
 // Builds the app without starting a server, so tests can call it directly.
 export function buildApp() {
@@ -8,6 +12,9 @@ export function buildApp() {
     logger: process.env.NODE_ENV !== 'test',
     genReqId: () => randomUUID(), // becomes request_id in every error response
   });
+
+  // Money and ids are bigint; send them as strings so no precision is lost.
+  app.setReplySerializer((payload) => toJson(payload));
 
   // One error shape everywhere: {"code": "...", "message": "...", "request_id": "..."}
   app.setErrorHandler((error, req, reply) => {
@@ -26,5 +33,8 @@ export function buildApp() {
   });
 
   app.register(healthRoutes);
+  app.register(userRoutes);
+  app.register(walletRoutes);
+  app.register(transferRoutes);
   return app;
 }
