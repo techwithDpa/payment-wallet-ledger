@@ -34,6 +34,12 @@ export function callerOf(req: FastifyRequest): { userId: bigint | null; isAdmin:
   return { userId, isAdmin: req.headers['x-admin'] === 'true' };
 }
 
+export function requireAdmin(req: FastifyRequest): void {
+  if (!callerOf(req).isAdmin) throw new AppError(403, 'FORBIDDEN', 'Admin only (X-Admin: true)');
+}
+
+export const idParams = z.object({ id: idSchema });
+
 export function requireUser(req: FastifyRequest): bigint {
   const { userId } = callerOf(req);
   if (userId === null) throw new AppError(401, 'UNAUTHENTICATED', 'X-User-Id header is required');

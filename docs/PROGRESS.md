@@ -2,6 +2,12 @@
 
 Newest first. At the end of every working session, add: what was done, what's next, anything surprising.
 
+## 2026-10-24 15:22 — Step 4 done (rest of the API)
+- Done: `POST /users` (409 EMAIL_TAKEN), `POST /users/{id}/wallets`, `GET /wallets/{id}/balance`, `GET /wallets/{id}/statement?limit&offset` (newest first, `created_at DESC, entry_id DESC`), `POST /transfers/withdraw`, `POST /transfers/{id}/reverse`, `GET /transfers/{id}` (+ entries + status_history). Every POST goes through `idempotent()`.
+- Decisions (for the README assumptions): reverse is admin-only (`X-Admin: true`); a reversal is refused with 422 if the receiver already spent the money (wallet never goes negative); a reversal can't be reversed; "not yours" and "doesn't exist" both return 404 so ids can't be probed; `POST /users` needs no `X-User-Id` and its idempotency scope is `user_id NULL`.
+- Verified: 36/36 tests (full money flow + 5 parallel reversals → exactly one 201); rebuilt the Docker api and smoke-tested over HTTP with curl.
+- Next: open a PR for `feature/steps-1-4` and check CI is green, then Step 8 (README design answers, seed, video), then Step 5 reconciliation. The `202 HELD` path of `POST /transfers` arrives with fraud rules (Step 6).
+
 ## 2026-10-24 15:16 — Step 3 done (idempotency)
 - Done: `idempotent()` in `src/services/idempotency.ts`. Claim key with `INSERT ... ON CONFLICT DO NOTHING` + run the transfer in the SAME transaction; business errors roll back to `SAVEPOINT money` and the error response is still saved. Seen key: different hash → 422 `IDEMPOTENCY_KEY_REUSED`, IN_PROGRESS → 409, COMPLETED → replay (header `idempotent-replayed: true`). Missing/invalid header → 400. Both transfer routes use it.
 - Detail: the reply is always the JSONB read back with `RETURNING`, so the first response and replays are byte-identical (JSONB reorders keys, so sending the JS object first would differ).

@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { toJson } from './json.js';
 import { healthRoutes } from './routes/health.js';
 import { transferRoutes } from './routes/transfers.js';
+import { userRoutes } from './routes/users.js';
+import { walletRoutes } from './routes/wallets.js';
 
 // Builds the app without starting a server, so tests can call it directly.
 export function buildApp() {
@@ -31,6 +33,8 @@ export function buildApp() {
   });
 
   app.register(healthRoutes);
+  app.register(userRoutes);
+  app.register(walletRoutes);
   app.register(transferRoutes);
   return app;
 }

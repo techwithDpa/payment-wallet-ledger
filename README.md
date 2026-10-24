@@ -27,5 +27,6 @@ npm test
 - [x] Milestone 1: schema (see docs/schema.md)
 - [x] Milestone 2: safe transfers + stampede test
 - [x] Milestone 3: idempotency
+- [x] Rest of the API: users, wallets, balance, statement, withdraw, reverse, transfer details
 - [ ] Milestone 4: reconciliation
 - [ ] Milestone 5: fraud rules + statement Q&A

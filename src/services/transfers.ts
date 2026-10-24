@@ -122,3 +122,50 @@ export async function systemAccountId(client: pg.PoolClient, code: 'cash_in' | '
   );
   return rows[0].account_id;
 }
+
+/**
+ * Undo a COMPLETED transfer with a new REVERSAL transfer in the opposite direction.
+ * We never edit or delete the original ledger lines; we add new ones.
+ * Must run inside withTransaction().
+ */
+export async function reverseTransfer(
+  client: pg.PoolClient,
+  transferId: bigint,
+  reason: string | null,
+  changedBy: bigint | null,
+): Promise<Transfer> {
+  // Lock the original so two admins reversing at once queue up; the second sees REVERSED.
+  const { rows: [original] } = await client.query<Transfer>(
+    'SELECT * FROM transfers WHERE transfer_id = $1 FOR UPDATE',
+    [transferId],
+  );
+  if (!original) throw new AppError(404, 'TRANSFER_NOT_FOUND', `Transfer ${transferId} not found`);
+  if (original.type === 'REVERSAL') {
+    throw new AppError(409, 'NOT_REVERSIBLE', 'A reversal cannot itself be reversed');
+  }
+  if (original.status === 'REVERSED') {
+    throw new AppError(409, 'ALREADY_REVERSED', `Transfer ${transferId} was already reversed`);
+  }
+  if (original.status !== 'COMPLETED') {
+    throw new AppError(409, 'NOT_REVERSIBLE', `Only COMPLETED transfers can be reversed (status is ${original.status})`);
+  }
+
+  // Money goes back: to -> from. If the receiver already spent it, this is 422 INSUFFICIENT_FUNDS.
+  const reversal = await moveMoney(client, {
+    type: 'REVERSAL',
+    fromAccountId: original.to_account_id,
+    toAccountId: original.from_account_id,
+    amount: original.amount,
+    note: reason,
+    createdBy: changedBy,
+    reversesTransferId: original.transfer_id,
+  });
+
+  await client.query(`UPDATE transfers SET status = 'REVERSED' WHERE transfer_id = $1`, [transferId]);
+  await client.query(
+    `INSERT INTO transfer_status_audit (transfer_id, old_status, new_status, changed_by, reason)
+     VALUES ($1, 'COMPLETED', 'REVERSED', $2, $3)`,
+    [transferId, changedBy, reason ?? `reversed by transfer ${reversal.transfer_id}`],
+  );
+  return reversal;
+}
