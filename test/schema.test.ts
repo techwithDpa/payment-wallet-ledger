@@ -50,18 +50,30 @@ describe('schema', () => {
 
   it('ledger_entries is append-only', async () => {
     const w = await newWallet();
-    const { rows: [cashIn] } = await pool.query(`SELECT account_id FROM accounts WHERE system_code = 'cash_in'`);
-    const { rows: [t] } = await pool.query(
-      `INSERT INTO transfers (type, status, from_account_id, to_account_id, amount)
-       VALUES ('TOPUP', 'COMPLETED', $1, $2, 100) RETURNING transfer_id`, [cashIn.account_id, w.accountId]);
-    const { rows: [e] } = await pool.query(
-      `INSERT INTO ledger_entries (transfer_id, account_id, direction, amount)
-       VALUES ($1, $2, 'C', 100) RETURNING entry_id`, [t.transfer_id, w.accountId]);
+    // Done inside a transaction we roll back, so this one-sided test entry
+    // never stays in the ledger (it would break "debits = credits").
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows: [cashIn] } = await client.query(`SELECT account_id FROM accounts WHERE system_code = 'cash_in'`);
+      const { rows: [t] } = await client.query(
+        `INSERT INTO transfers (type, status, from_account_id, to_account_id, amount)
+         VALUES ('TOPUP', 'COMPLETED', $1, $2, 100) RETURNING transfer_id`, [cashIn.account_id, w.accountId]);
+      const { rows: [e] } = await client.query(
+        `INSERT INTO ledger_entries (transfer_id, account_id, direction, amount)
+         VALUES ($1, $2, 'C', 100) RETURNING entry_id`, [t.transfer_id, w.accountId]);
 
-    await expect(pool.query('UPDATE ledger_entries SET amount = 1 WHERE entry_id = $1', [e.entry_id]))
-      .rejects.toThrow(/append-only/);
-    await expect(pool.query('DELETE FROM ledger_entries WHERE entry_id = $1', [e.entry_id]))
-      .rejects.toThrow(/append-only/);
+      // A failed statement aborts the transaction, so each attempt gets its own savepoint.
+      await client.query('SAVEPOINT s');
+      await expect(client.query('UPDATE ledger_entries SET amount = 1 WHERE entry_id = $1', [e.entry_id]))
+        .rejects.toThrow(/append-only/);
+      await client.query('ROLLBACK TO SAVEPOINT s');
+      await expect(client.query('DELETE FROM ledger_entries WHERE entry_id = $1', [e.entry_id]))
+        .rejects.toThrow(/append-only/);
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
   });
 
   it('amounts must be positive', async () => {

@@ -25,7 +25,7 @@ npm test
 
 - [x] Step 0: skeleton, Docker Compose, first migration, CI
 - [x] Milestone 1: schema (see docs/schema.md)
-- [ ] Milestone 2: safe transfers + stampede test
+- [x] Milestone 2: safe transfers + stampede test
 - [ ] Milestone 3: idempotency
 - [ ] Milestone 4: reconciliation
 - [ ] Milestone 5: fraud rules + statement Q&A
