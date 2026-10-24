@@ -17,7 +17,7 @@ docker compose run --rm api node dist/seed.js # demo users Asha, Ravi, Meera wit
 ```bash
 docker compose up -d db migrate   # database + schema
 npm install
-npm test                          # 41 tests, ~6 s, includes the 100-request stampede x20 and 10k-transfer reconciliation
+npm test                          # 49 tests, ~7 s, includes the 100-request stampede x20 and 10k-transfer reconciliation
 npm run seed                      # same demo data, from your laptop
 ```
 
@@ -36,12 +36,14 @@ Errors are always `{"code": "...", "message": "...", "request_id": "..."}`.
 | GET | `/wallets/{id}/balance` | owner or admin | 200, 404 |
 | GET | `/wallets/{id}/statement?limit=20&offset=0` | owner or admin | 200 (newest first) |
 | POST | `/transfers/topup` `{wallet_id, amount, note?}` | owner | 201, 404 |
-| POST | `/transfers` `{from_wallet_id, to_wallet_id, amount, note?}` | owner of `from` | 201, 404, 422 `INSUFFICIENT_FUNDS` |
+| POST | `/transfers` `{from_wallet_id, to_wallet_id, amount, note?}` | owner of `from` | 201, **202 HELD** by a fraud rule, 404, 422 `INSUFFICIENT_FUNDS`; body includes `risk_flags` |
 | POST | `/transfers/withdraw` `{wallet_id, amount, note?}` | owner | 201, 422 |
 | POST | `/transfers/{id}/reverse` `{reason?}` | admin | 201, 404, 409 `ALREADY_REVERSED` / `NOT_REVERSIBLE`, 422 |
-| GET | `/transfers/{id}` | either party or admin | 200 with `entries` and `status_history` |
+| GET | `/transfers/{id}` | either party or admin | 200 with `entries`, `status_history` and `risk_flags` |
 | POST | `/admin/reconciliation/run` | admin | 202 `{recon_run_id, status_url}`; the check runs in the background |
 | GET | `/admin/reconciliation/runs/{id}` | admin | 200 run summary + `issues`, 404 |
+| GET | `/admin/risk/queue?limit&offset` | admin | 200 HELD transfers, oldest first, with their flags |
+| POST | `/admin/risk/{transfer_id}/decision` `{decision: "release" \| "reverse", reason?}` | admin | 200, 404, 409 `NOT_HELD`, 422 (release but the money is gone) |
 | GET | `/health` | anyone | 200 |
 
 Idempotency errors on any POST: 400 `IDEMPOTENCY_KEY_REQUIRED`, 409 `REQUEST_IN_PROGRESS`, 422 `IDEMPOTENCY_KEY_REUSED`. A replay returns the saved status and body with header `idempotent-replayed: true`.
@@ -107,6 +109,20 @@ See it happen: [`docs/isolation.md`](docs/isolation.md) replays double spend, de
   2. *Balance check:* each stored balance is compared with two independent views: **L** (credits − debits in the ledger) and **T** (money in − money out in the transfers table). A broken transfer makes L and T disagree, but the stored balance still matches one of them, so it's a symptom already reported by check 1. Only a balance that matches **neither** was itself changed → `ACCOUNT_BALANCE_MISMATCH`.
 - Proof: 10,000 transfers, then corrupt one amount, delete one credit line and change one stored balance → exactly 3 issues. A naive "balance ≠ ledger" check would report 5. After repair → 0. The run also stores total debits vs total credits.
 
+### Fraud rules
+`src/services/risk.ts`. Thresholds live in the `risk_rules` table (tunable without a deploy). Checked on wallet-to-wallet transfers (`POST /transfers`).
+
+| Rule | Action | Default |
+| --- | --- | --- |
+| `VELOCITY` | HOLD | more than 5 outgoing transfers in 10 min |
+| `AMOUNT_SPIKE` | HOLD | amount above 5x the wallet's 30-day average; skipped without history |
+| `NEW_PAYEE_LARGE` | FLAG (allow) | first transfer to this payee above ₹10,000 |
+
+- Rules run **inside `moveMoney()`, after the sender's row is locked**, so 10 parallel transfers are counted one by one and can't all slip under the velocity limit.
+- A **HELD** transfer is saved with its flags but writes **no ledger lines and changes no balance**; the client gets **202**.
+- **Release** re-locks the accounts, re-checks the balance (422 and it stays HELD if the money is gone meanwhile), then posts the D/C lines: the same code as a normal transfer. **Reverse** marks it `REJECTED`; no money moved, so nothing to undo. Both write a status-audit row and resolve the flags.
+- The spike comparison happens in SQL (`amount > 5 * avg(amount)`), so the average never becomes a JS float.
+
 ### Trade-offs
 | Choice | Gain | Cost |
 | --- | --- | --- |
@@ -117,12 +133,14 @@ See it happen: [`docs/isolation.md`](docs/isolation.md) replays double spend, de
 | OFFSET pagination | simple | slow at deep offsets (keyset pagination is in Next) |
 | Reconciliation scans everything | simple, catches anything | O(ledger size) per run; at scale, check only accounts touched since the last run |
 | Header auth | lets the project focus on the ledger | not real security |
+| HELD doesn't reserve funds | balances stay simple, ledger untouched while held | release can fail with 422 if the wallet was emptied meanwhile |
 
 ## Assumptions
 - Auth is `X-User-Id` (caller) and `X-Admin: true` (admin). A real system would use signed tokens.
 - `POST /users` needs no `X-User-Id`; its idempotency scope is "anonymous".
 - One currency, INR. A user may open several wallets.
 - KYC status is stored, not enforced.
+- Fraud rules apply to wallet-to-wallet transfers only (not top-ups or withdrawals). For a HELD transfer, the admin decision `reverse` means reject.
 - Only admins reverse transfers. A reversal is refused (422) if the receiver already spent the money, so a wallet never goes negative. A reversal can't itself be reversed.
 - Asking for a wallet or transfer that isn't yours returns 404, the same as one that doesn't exist, so ids can't be probed.
 
@@ -137,9 +155,9 @@ See it happen: [`docs/isolation.md`](docs/isolation.md) replays double spend, de
 - [x] Seed data (`npm run seed`)
 - [x] Isolation lab: [`docs/isolation.md`](docs/isolation.md), 4 two-session psql cases
 - [x] Reconciliation: nightly worker job + admin endpoints, root-cause issues, no overlapping runs
+- [x] Fraud rules: velocity / amount spike / new payee, HELD transfers (202), admin queue + release/reverse
 
 **Not done yet**
-- [ ] Fraud rules: HELD transfers (`202`), `/admin/risk/*` (Step 6)
 - [ ] Statement Q&A with mock LLM (Step 7)
 - [ ] Fees (the `FEE` type exists, nothing charges one)
 

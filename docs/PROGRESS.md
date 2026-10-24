@@ -2,6 +2,13 @@
 
 Newest first. At the end of every working session, add: what was done, what's next, anything surprising.
 
+## 2026-10-24 16:45 — Step 6 done (fraud rules)
+- Done: migration `20261024030000_risk.sql` (risk_rules seeded with VELOCITY / AMOUNT_SPIKE / NEW_PAYEE_LARGE, risk_flags, indexes on transfers for the rule lookups and the HELD queue). `src/services/risk.ts` `assessRisk()`. `moveMoney()` split into `lockAccounts()` + `postEntries()` and gained `riskCheck`: rules run after the lock; a HOLD hit saves the transfer as HELD with no ledger lines. `decideHeld()` (release re-locks, re-checks, posts; reject → REJECTED). Routes: `POST /transfers` → 202 when held (+ `risk_flags`), `GET /admin/risk/queue`, `POST /admin/risk/{id}/decision` (release | reverse), `risk_flags` on `GET /transfers/{id}`.
+- Decision: the stampede test switches VELOCITY off for itself (it tests locking; 100 transfers/second would otherwise be held). Safe because test files run sequentially.
+- Verified: 49/49 tests twice (6th transfer → 202, no lines; release moves money + audit HELD→COMPLETED; reverse → REJECTED, nothing moves; release with emptied wallet → 422 stays HELD; spike skipped without history; new payee > ₹10,000 flagged but allowed, = ₹10,000 not). Docker smoke test: 5×201, 202, release → COMPLETED.
+- Surprising: the first (failing) stampede run with velocity on left 95 HELD transfers in the local DB, plus 3 from the first risk-test run. Rejected all 98 locally via `decideHeld()` (reason "cleanup: leftover from a test run"); risk tests now reject what they hold, so the queue stays empty between runs.
+- Next: merge PRs #3 → #4 → #5 → this one. Then Step 7 (statement Q&A with mock LLM, prompt-injection test), then record the video.
+
 ## 2026-10-24 16:25 — Isolation lab done (`docs/isolation.md`)
 - Done: 4 two-session psql cases, each tied to a code choice, with outputs captured from real runs on the dev DB (throwaway `lab_` tables, dropped afterwards):
   1. double spend: read-then-write loses 700 (1400 spent from 1000) vs `FOR UPDATE` + re-check → `moveMoney()`
