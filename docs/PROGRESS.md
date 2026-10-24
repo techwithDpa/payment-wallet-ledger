@@ -2,6 +2,14 @@
 
 Newest first. At the end of every working session, add: what was done, what's next, anything surprising.
 
+## 2026-10-24 15:58 — Step 8 done (README, seed, demo script); video still to record
+- Done: `src/seed.ts` (`npm run seed`, or `docker compose run --rm api node dist/seed.js`): Asha, Ravi, Meera with top-ups, peer transfers, a withdrawal and a reversed mistake, all through `moveMoney()`/`reverseTransfer()`; skips if already seeded. Test: expected balances, stored == ledger, safe to run twice.
+- Done: README rewritten: run, tests, API table, curl examples, design (data model, locking, idempotency, reversals), trade-offs, assumptions, Done / Not done / Next.
+- Done: `docs/demo.md`, a ~5 min video script; every command checked against the running Docker API.
+- Surprising: the append-only demo `UPDATE ... WHERE entry_id = 1` printed `UPDATE 0` (no such row → a row trigger never fires). The script now targets `min(entry_id)`.
+- Verified: 37/37 tests; seed works locally and inside Docker.
+- Next: record the video (you), merge PR #1 then the Step 8 PR, then Step 5 reconciliation, then `docs/isolation.md`.
+
 ## 2026-10-24 15:30 — Money path: what is implemented (reference)
 Everything that moves money, in one place. All of it runs inside ONE transaction on ONE `PoolClient` (`withTransaction('READ COMMITTED', ...)` via `idempotent()`).
 
