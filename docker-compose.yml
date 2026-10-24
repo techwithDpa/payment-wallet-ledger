@@ -1,0 +1,54 @@
+# One command starts everything: docker compose up --build
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: wallet
+      POSTGRES_PASSWORD: wallet
+      POSTGRES_DB: wallet
+    ports:
+      - "5432:5432"          # so you can psql in from your laptop (isolation lab)
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:             # "is Postgres ready to accept connections?"
+      test: ["CMD-SHELL", "pg_isready -U wallet -d wallet"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:                   # runs every .sql file in db/migrations once, then exits
+    image: amacneil/dbmate:2
+    command: ["--wait", "up"]
+    environment:
+      DATABASE_URL: postgres://wallet:wallet@db:5432/wallet?sslmode=disable
+      DBMATE_MIGRATIONS_DIR: /db/migrations
+      DBMATE_NO_DUMP_SCHEMA: "true"
+    volumes:
+      - ./db:/db
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build: .
+    command: ["node", "dist/server.js"]
+    environment:
+      DATABASE_URL: postgres://wallet:wallet@db:5432/wallet
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully   # never start before the schema exists
+
+  worker:
+    build: .
+    command: ["node", "dist/worker.js"]
+    environment:
+      DATABASE_URL: postgres://wallet:wallet@db:5432/wallet
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
