@@ -81,6 +81,8 @@ Inside one `READ COMMITTED` transaction (`src/services/transfers.ts`, `moveMoney
 Proof: the stampede test (₹500 wallet, 100 parallel ₹10 transfers) gets exactly 50 successes and ends at 0 in all 20 rounds.
 The database is the last line of defence: `CHECK (kind = 'SYSTEM' OR balance >= 0)` refuses a negative wallet even if the code had a bug.
 
+See it happen: [`docs/isolation.md`](docs/isolation.md) replays double spend, deadlock, inconsistent reads and duplicate requests in two psql sessions.
+
 **Why row locks and not SERIALIZABLE?** Locks make conflicting transfers *wait* instead of fail. SERIALIZABLE would abort them with serialization errors that every caller must retry. For a hot wallet, waiting is cheaper and simpler to reason about.
 
 ### Idempotency
@@ -133,12 +135,12 @@ The database is the last line of defence: `CHECK (kind = 'SYSTEM' OR balance >= 
 - [x] Idempotency (sequential, parallel, key reuse, saved errors)
 - [x] Users, wallets, balance, statement, top-up, transfer, withdraw, reverse, transfer details
 - [x] Seed data (`npm run seed`)
+- [x] Isolation lab: [`docs/isolation.md`](docs/isolation.md), 4 two-session psql cases
 - [x] Reconciliation: nightly worker job + admin endpoints, root-cause issues, no overlapping runs
 
 **Not done yet**
 - [ ] Fraud rules: HELD transfers (`202`), `/admin/risk/*` (Step 6)
 - [ ] Statement Q&A with mock LLM (Step 7)
-- [ ] `docs/isolation.md` (4 two-session psql cases)
 - [ ] Fees (the `FEE` type exists, nothing charges one)
 
 **Next**
