@@ -48,5 +48,13 @@ docker compose exec db psql -U wallet -c "UPDATE ledger_entries SET amount = 1 W
 # ERROR: ledger_entries is append-only: UPDATE is not allowed
 ```
 
-## 6. Wrap-up (30 s)
+## 6. Reconciliation (45 s)
+```bash
+curl -s -XPOST localhost:3000/admin/reconciliation/run -H 'x-admin: true' -H "idempotency-key: $(uuidgen)"
+curl -s localhost:3000/admin/reconciliation/runs/<recon_run_id> -H 'x-admin: true'   # COMPLETED, issue_count 0
+npx vitest run test/reconciliation.test.ts
+```
+Say: 10k transfers, three corruptions (an amount, a deleted credit line, a stored balance) → exactly 3 root problems, not 5 symptoms. Explain the "matches neither view" rule.
+
+## 7. Wrap-up (30 s)
 Show README "Done / Not done / Next" and the green CI run on the PR.

@@ -2,6 +2,14 @@
 
 Newest first. At the end of every working session, add: what was done, what's next, anything surprising.
 
+## 2026-10-24 16:12 — Step 5 done (reconciliation)
+- Done: migration `20261024020000_reconciliation.sql` (recon_runs, recon_issues). `src/services/reconciliation.ts`: one `REPEATABLE READ` snapshot, `job_locks` row `FOR UPDATE NOWAIT` (second run → SKIPPED), two checks written as `INSERT ... SELECT` into recon_issues, totals of debits/credits on the run. `POST /admin/reconciliation/run` (202, idempotent, runs in background after commit), `GET /admin/reconciliation/runs/{id}`. Worker: nightly at 02:30 (heartbeat removed).
+- Root-cause rule: transfer whose lines don't match it → TRANSFER_LEDGER_MISMATCH. Account reported only if stored balance ≠ ledger view AND ≠ transfers view (otherwise it's a symptom of a broken transfer).
+- Verified: 10k transfers + corrupt amount + delete credit + change balance → exactly 3 issues; repaired → 0; overlapping run → SKIPPED; 41/41 tests twice; Docker API + worker smoke test.
+- Test changes: `vitest.config.ts` `fileParallelism: false` (the recon test briefly corrupts the shared DB; other files' "debits = credits" checks must not see that). The recon test uses `session_replication_role = replica` (superuser) to get past the append-only trigger, then deletes all its data. The seed test now checks exact balances only on a fresh DB (I had used the demo users by hand).
+- Surprising: PR #2 was merged into `feature/steps-1-4`, not `main` (stacked PRs only retarget when the base branch is deleted). Opened PR #3 to bring Step 8 into `main`; this branch is based on it.
+- Next: merge PR #3, then this PR. Then `docs/isolation.md`, then Step 6 fraud rules (HELD/202, risk_rules, risk_flags, `/admin/risk/*`).
+
 ## 2026-10-24 15:58 — Step 8 done (README, seed, demo script); video still to record
 - Done: `src/seed.ts` (`npm run seed`, or `docker compose run --rm api node dist/seed.js`): Asha, Ravi, Meera with top-ups, peer transfers, a withdrawal and a reversed mistake, all through `moveMoney()`/`reverseTransfer()`; skips if already seeded. Test: expected balances, stored == ledger, safe to run twice.
 - Done: README rewritten: run, tests, API table, curl examples, design (data model, locking, idempotency, reversals), trade-offs, assumptions, Done / Not done / Next.

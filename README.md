@@ -17,7 +17,7 @@ docker compose run --rm api node dist/seed.js # demo users Asha, Ravi, Meera wit
 ```bash
 docker compose up -d db migrate   # database + schema
 npm install
-npm test                          # 37 tests, ~5 s, includes the 100-request stampede x20
+npm test                          # 41 tests, ~6 s, includes the 100-request stampede x20 and 10k-transfer reconciliation
 npm run seed                      # same demo data, from your laptop
 ```
 
@@ -40,6 +40,8 @@ Errors are always `{"code": "...", "message": "...", "request_id": "..."}`.
 | POST | `/transfers/withdraw` `{wallet_id, amount, note?}` | owner | 201, 422 |
 | POST | `/transfers/{id}/reverse` `{reason?}` | admin | 201, 404, 409 `ALREADY_REVERSED` / `NOT_REVERSIBLE`, 422 |
 | GET | `/transfers/{id}` | either party or admin | 200 with `entries` and `status_history` |
+| POST | `/admin/reconciliation/run` | admin | 202 `{recon_run_id, status_url}`; the check runs in the background |
+| GET | `/admin/reconciliation/runs/{id}` | admin | 200 run summary + `issues`, 404 |
 | GET | `/health` | anyone | 200 |
 
 Idempotency errors on any POST: 400 `IDEMPOTENCY_KEY_REQUIRED`, 409 `REQUEST_IN_PROGRESS`, 422 `IDEMPOTENCY_KEY_REUSED`. A replay returns the saved status and body with header `idempotent-replayed: true`.
@@ -93,6 +95,16 @@ The database is the last line of defence: `CHECK (kind = 'SYSTEM' OR balance >= 
 ### Corrections: append-only ledger + reversals
 `ledger_entries` has a trigger that raises on UPDATE, DELETE and TRUNCATE. A mistake is fixed with a **REVERSAL** transfer that moves the same amount back, and the original is marked `REVERSED` in `transfer_status_audit`. `reverses_transfer_id UNIQUE` plus a row lock on the original guarantee a transfer is reversed at most once (5 parallel reversals → exactly one 201).
 
+### Reconciliation
+`src/services/reconciliation.ts`. Runs nightly at 02:30 in the worker, or on demand via `POST /admin/reconciliation/run`.
+
+- **One snapshot.** The whole check runs in one `REPEATABLE READ` transaction, so transfers committing during the run can't look like mismatches.
+- **Never two at once.** A run takes the `job_locks` row with `FOR UPDATE NOWAIT`; a second run gives up immediately and is recorded as `SKIPPED`.
+- **Root problems, not symptoms.** Two checks:
+  1. *Transfer check:* every moved transfer has exactly one D line on its sender and one C line on its receiver, both equal to its amount (HELD/REJECTED: no lines). A broken one → `TRANSFER_LEDGER_MISMATCH`.
+  2. *Balance check:* each stored balance is compared with two independent views: **L** (credits − debits in the ledger) and **T** (money in − money out in the transfers table). A broken transfer makes L and T disagree, but the stored balance still matches one of them, so it's a symptom already reported by check 1. Only a balance that matches **neither** was itself changed → `ACCOUNT_BALANCE_MISMATCH`.
+- Proof: 10,000 transfers, then corrupt one amount, delete one credit line and change one stored balance → exactly 3 issues. A naive "balance ≠ ledger" check would report 5. After repair → 0. The run also stores total debits vs total credits.
+
 ### Trade-offs
 | Choice | Gain | Cost |
 | --- | --- | --- |
@@ -101,6 +113,7 @@ The database is the last line of defence: `CHECK (kind = 'SYSTEM' OR balance >= 
 | Key + money in one transaction | no half states | a duplicate holds a DB connection while it waits |
 | Plain SQL, no ORM | every lock and query is visible and reviewable | more hand-written SQL |
 | OFFSET pagination | simple | slow at deep offsets (keyset pagination is in Next) |
+| Reconciliation scans everything | simple, catches anything | O(ledger size) per run; at scale, check only accounts touched since the last run |
 | Header auth | lets the project focus on the ledger | not real security |
 
 ## Assumptions
@@ -120,9 +133,9 @@ The database is the last line of defence: `CHECK (kind = 'SYSTEM' OR balance >= 
 - [x] Idempotency (sequential, parallel, key reuse, saved errors)
 - [x] Users, wallets, balance, statement, top-up, transfer, withdraw, reverse, transfer details
 - [x] Seed data (`npm run seed`)
+- [x] Reconciliation: nightly worker job + admin endpoints, root-cause issues, no overlapping runs
 
 **Not done yet**
-- [ ] Nightly reconciliation + `/admin/reconciliation/*` (Step 5)
 - [ ] Fraud rules: HELD transfers (`202`), `/admin/risk/*` (Step 6)
 - [ ] Statement Q&A with mock LLM (Step 7)
 - [ ] `docs/isolation.md` (4 two-session psql cases)
